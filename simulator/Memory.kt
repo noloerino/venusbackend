@@ -1,25 +1,54 @@
 package venusbackend.simulator
 
+import venus.Renderer
 import venusbackend.plus
 import venusbackend.shr
+import venusbackend.ushr
+import venusbackend.riscv.MemSize
+
+typealias ByteAddress = Number
+typealias WordAddress = Int
+
+fun ByteAddress.toWordAddress(): WordAddress = this.toInt() ushr 2
+fun ByteAddress.wordOffsetShamt(): Int = 8 * (this.toInt() and 0b11)
+fun ByteAddress.isByteAligned(): Boolean = MemSize.BYTE.isAligned(this)
+fun ByteAddress.isHalfAligned(): Boolean = MemSize.HALF.isAligned(this)
+fun ByteAddress.isWordAligned(): Boolean = MemSize.WORD.isAligned(this)
+fun ByteAddress.isLongAligned(): Boolean = MemSize.LONG.isAligned(this)
+
+/**
+ * Returns a bit mask that would get the desired byte offset out of the mask.
+ * For example, if byteAddr ends in 0b01, this would return 0x0000_FF00.
+ */
+fun ByteAddress.wordOffsetMask(): Int = 0xFF shl this.wordOffsetShamt()
 
 /**
  * A class representing a computer's memory.
+ *
+ * @param alignedAddresses is false if unaligned accesses are allowed (the default setting). Otherwise, unaligned
+ * accesses raise an [AlignmentError].
  */
-class Memory {
+class Memory(val alignedAddresses: Boolean = false) {
     /**
-     * A hashmap which maps addresses to the value stored at that place in memory.
+     * A hashmap which maps WORD addresses to the WORD value stored at that place in memory.
+     * To address specific bytes, examine the lower two bits of the byte address.
+     *
+     * As the RISCV ISA is little-endian by default, the values of the map are also little endian.
      *
      * Unlike MARS, I've made the design decision to use a hashmap. This allows for us to write anywhere in memory
      * without being concerned with writing out of bounds (4 MB). The downside is that this has a higher overhead.
-     *
-     * @todo Transition to a `HashMap<Int, Int>`, which will have a smaller overhead (although more code complexity)
      */
-    // TODO Change this from long :(
-    private val memory = HashMap<Long, Byte>()
+    private val memory = HashMap<WordAddress, Int>()
 
-    fun removeByte(addr: Number) {
-        memory.remove(addr)
+    fun removeByte(addr: ByteAddress) {
+        val wordAddr = addr.toWordAddress()
+        // Mask out specified bits
+        val newMemWord = memory[wordAddr]?.and(addr.wordOffsetMask().inv()) ?: 0
+        if (newMemWord == 0) {
+            memory.remove(wordAddr)
+        } else {
+            memory[wordAddr] = newMemWord
+        }
     }
 
     /**
@@ -28,11 +57,7 @@ class Memory {
      * @param addr the address to load from
      * @return the byte at that location, or 0 if that location has not been written to
      */
-//    fun loadByte(addr: Number): Int = memory[addr]?.toInt()?.and(0xff) ?: 0
-    fun loadByte(addr: Number): Int {
-        val v = memory[addr.toLong()]
-        return v?.toInt()?.and(0xff) ?: 0
-    }
+    fun loadByte(addr: ByteAddress): Int = memory[addr.toWordAddress()]?.and(addr.wordOffsetMask())?.ushr(addr.wordOffsetShamt()) ?: 0
 
     /**
      * Loads an unsigned halfword from memory
@@ -40,11 +65,12 @@ class Memory {
      * @param addr the address to load from
      * @return the halfword at that location, or 0 if that location has not been written to
      */
-//    fun loadHalfWord(addr: Number): Int = (loadByte(addr + 1) shl 8) or loadByte(addr)
-    fun loadHalfWord(addr: Number): Int {
+    fun loadHalfWord(addr: ByteAddress): Int {
+        if (alignedAddresses) {
+            assertHalfWordAligned(addr)
+        }
+        val msb = loadByte(addr + 1) shl 8
         val lsb = loadByte(addr)
-        val msbb = loadByte(addr + 1)
-        val msb = (msbb shl 8)
         return msb or lsb
     }
 
@@ -54,7 +80,17 @@ class Memory {
      * @param addr the address to load from
      * @return the word at that location, or 0 if that location has not been written to
      */
-    fun loadWord(addr: Number): Int = (loadHalfWord(addr + 2) shl 16) or loadHalfWord(addr)
+    fun loadWord(addr: ByteAddress): Int =
+            if (addr.isWordAligned()) {
+                memory[addr.toWordAddress()] ?: 0
+            } else {
+                if (alignedAddresses) {
+                    assertWordAligned(addr)
+                }
+                val msb = loadHalfWord(addr + 2) shl 16
+                val lsb = loadHalfWord(addr)
+                msb or lsb
+            }
 
     /**
      * Loads a long from memory
@@ -62,7 +98,15 @@ class Memory {
      * @param addr the address to load from
      * @return the long at that location, or 0 if that location has not been written to
      */
-    fun loadLong(addr: Number): Long = (loadWord(addr + 4).toLong() shl 32) or loadWord(addr).toLong()
+    fun loadLong(addr: ByteAddress): Long {
+        if (alignedAddresses) {
+            assertLongAligned(addr)
+        }
+        val msb = loadWord(addr + 4).toLong() shl 32
+        // Upcasting from 2s complement will sign extend
+        val lsb = loadWord(addr).toLong() and 0xFFFF_FFFFL
+        return msb or lsb
+    }
 
     /**
      * Stores a byte in memory, truncating the given Int if necessary
@@ -70,7 +114,13 @@ class Memory {
      * @param addr the address to write to
      * @param value the value to write
      */
-    fun storeByte(addr: Number, value: Number) { memory[addr.toLong()] = value.toByte() }
+    fun storeByte(addr: ByteAddress, value: Number) {
+        // retrieve old word and make room for the new
+        val wordAddr = addr.toWordAddress()
+        val oldWord = memory[wordAddr]?.and(addr.wordOffsetMask().inv()) ?: 0
+        val newByte = value.toInt() shl addr.wordOffsetShamt()
+        memory[wordAddr] = oldWord or newByte
+    }
 
     /**
      * Stores a halfword in memory, truncating the given Int if necessary
@@ -78,7 +128,10 @@ class Memory {
      * @param addr the address to write to
      * @param value the value to write
      */
-    fun storeHalfWord(addr: Number, value: Number) {
+    fun storeHalfWord(addr: ByteAddress, value: Number) {
+        if (alignedAddresses) {
+            assertHalfWordAligned(addr)
+        }
         storeByte(addr, value)
         storeByte(addr + 1, value shr 8)
     }
@@ -89,19 +142,55 @@ class Memory {
      * @param addr the address to write to
      * @param value the value to write
      */
-    fun storeWord(addr: Number, value: Number) {
-        storeHalfWord(addr, value)
-        storeHalfWord(addr + 2, value shr 16)
+    fun storeWord(addr: ByteAddress, value: Number) {
+        if (addr.isWordAligned()) {
+            memory[addr.toWordAddress()] = value.toInt()
+        } else {
+            if (alignedAddresses) {
+                assertWordAligned(addr)
+            }
+            storeHalfWord(addr, value)
+            storeHalfWord(addr + 2, value shr 16)
+        }
     }
 
     /**
-     * Stores a word in memory
+     * Stores a long in memory
      *
      * @param addr the address to write to
      * @param value the value to write
      */
-    fun storeLong(addr: Number, value: Number) {
+    fun storeLong(addr: ByteAddress, value: Number) {
+        if (alignedAddresses) {
+            assertLongAligned(addr)
+        }
         storeWord(addr, value)
-        storeWord(addr + 4, value shr 32)
+        storeWord(addr + 4, value ushr 32)
+    }
+
+    companion object {
+        fun assertByteAligned(byteAddr: ByteAddress) {
+            if (!byteAddr.isByteAligned()) {
+                throw AlignmentError("Address: '${Renderer.toHex(byteAddr)}' is not BYTE aligned!")
+            }
+        }
+
+        fun assertHalfWordAligned(byteAddr: ByteAddress) {
+            if (!byteAddr.isHalfAligned()) {
+                throw AlignmentError("Address: '${Renderer.toHex(byteAddr)}' is not HALF aligned!")
+            }
+        }
+
+        fun assertWordAligned(byteAddr: ByteAddress) {
+            if (!byteAddr.isWordAligned()) {
+                throw AlignmentError("Address: '${Renderer.toHex(byteAddr)}' is not WORD aligned!")
+            }
+        }
+
+        fun assertLongAligned(byteAddr: ByteAddress) {
+            if (!byteAddr.isLongAligned()) {
+                throw AlignmentError("Address: '${Renderer.toHex(byteAddr)}' is not LONG aligned!")
+            }
+        }
     }
 }

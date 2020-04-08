@@ -101,7 +101,7 @@ class Simulator(
         state.incMaxPC(amount)
     }
 
-    fun getInstAt(addr: Number): MachineCode {
+    fun getInstAt(addr: ByteAddress): MachineCode {
         val instnum = invInstOrderMapping[addr]!!.toInt()
         return linkedProgram.prog.insts[instnum]
     }
@@ -349,7 +349,7 @@ class Simulator(
         postInstruction.add(PCDiff(getPC()))
     }
 
-    fun isValidAccess(addr: Number, bytes: Int) {
+    fun isValidAccess(addr: ByteAddress, bytes: Int) {
         if (!this.settings.allowAccessBtnStackHeap) {
             val upperAddr = addr + bytes
             val sp = state.getReg(Registers.sp)
@@ -363,10 +363,10 @@ class Simulator(
         }
     }
 
-    fun loadByte(addr: Number): Int = state.mem.loadByte(addr)
-    fun loadBytewCache(addr: Number): Int {
-        if (this.settings.alignedAddress && addr % MemSize.BYTE.size != 0) {
-            throw AlignmentError("Address: '" + Renderer.toHex(addr) + "' is not BYTE aligned!")
+    fun loadByte(addr: ByteAddress): Int = state.mem.loadByte(addr)
+    fun loadBytewCache(addr: ByteAddress): Int {
+        if (this.settings.alignedAddress) {
+            Memory.assertByteAligned(addr)
         }
         this.isValidAccess(addr, MemSize.BYTE.size)
         preInstruction.add(CacheDiff(Address(addr, MemSize.BYTE)))
@@ -375,10 +375,10 @@ class Simulator(
         return this.loadByte(addr)
     }
 
-    fun loadHalfWord(addr: Number): Int = state.mem.loadHalfWord(addr)
-    fun loadHalfWordwCache(addr: Number): Int {
-        if (this.settings.alignedAddress && addr % MemSize.HALF.size != 0) {
-            throw AlignmentError("Address: '" + Renderer.toHex(addr) + "' is not HALF WORD aligned!")
+    fun loadHalfWord(addr: ByteAddress): Int = state.mem.loadHalfWord(addr)
+    fun loadHalfWordwCache(addr: ByteAddress): Int {
+        if (this.settings.alignedAddress) {
+            Memory.assertHalfWordAligned(addr)
         }
         this.isValidAccess(addr, MemSize.HALF.size)
         preInstruction.add(CacheDiff(Address(addr, MemSize.HALF)))
@@ -387,10 +387,10 @@ class Simulator(
         return this.loadHalfWord(addr)
     }
 
-    fun loadWord(addr: Number): Int = state.mem.loadWord(addr)
-    fun loadWordwCache(addr: Number): Int {
-        if (this.settings.alignedAddress && addr % MemSize.WORD.size != 0) {
-            throw AlignmentError("Address: '" + Renderer.toHex(addr) + "' is not WORD aligned!")
+    fun loadWord(addr: ByteAddress): Int = state.mem.loadWord(addr)
+    fun loadWordwCache(addr: ByteAddress): Int {
+        if (this.settings.alignedAddress) {
+            Memory.assertWordAligned(addr)
         }
         this.isValidAccess(addr, MemSize.WORD.size)
         preInstruction.add(CacheDiff(Address(addr, MemSize.WORD)))
@@ -399,10 +399,10 @@ class Simulator(
         return this.loadWord(addr)
     }
 
-    fun loadLong(addr: Number): Long = state.mem.loadLong(addr)
-    fun loadLongwCache(addr: Number): Long {
-        if (this.settings.alignedAddress && addr % MemSize.LONG.size != 0) {
-            throw AlignmentError("Address: '" + Renderer.toHex(addr) + "' is not LONG aligned!")
+    fun loadLong(addr: ByteAddress): Long = state.mem.loadLong(addr)
+    fun loadLongwCache(addr: ByteAddress): Long {
+        if (this.settings.alignedAddress) {
+            Memory.assertLongAligned(addr)
         }
         this.isValidAccess(addr, MemSize.LONG.size)
         preInstruction.add(CacheDiff(Address(addr, MemSize.LONG)))
@@ -411,15 +411,15 @@ class Simulator(
         return this.loadLong(addr)
     }
 
-    fun storeByte(addr: Number, value: Number) {
+    fun storeByte(addr: ByteAddress, value: Number) {
         preInstruction.add(MemoryDiff(addr, loadWord(addr)))
         state.mem.storeByte(addr, value)
         postInstruction.add(MemoryDiff(addr, loadWord(addr)))
         this.storeTextOverrideCheck(addr, value, MemSize.BYTE)
     }
-    fun storeBytewCache(addr: Number, value: Number) {
-        if (this.settings.alignedAddress && addr % MemSize.BYTE.size != 0) {
-            throw AlignmentError("Address: '" + Renderer.toHex(addr) + "' is not BYTE aligned!")
+    fun storeBytewCache(addr: ByteAddress, value: Number) {
+        if (this.settings.alignedAddress) {
+            Memory.assertByteAligned(addr)
         }
         // FIXME change the cast to maxpc to something more generic or make the iterator be generic.
         if (!this.settings.mutableText && addr in (MemorySegments.TEXT_BEGIN + 1 - MemSize.BYTE.size)..state.getMaxPC().toInt()) {
@@ -432,15 +432,15 @@ class Simulator(
         postInstruction.add(CacheDiff(Address(addr, MemSize.BYTE)))
     }
 
-    fun storeHalfWord(addr: Number, value: Number) {
+    fun storeHalfWord(addr: ByteAddress, value: Number) {
         preInstruction.add(MemoryDiff(addr, loadWord(addr)))
         state.mem.storeHalfWord(addr, value)
         postInstruction.add(MemoryDiff(addr, loadWord(addr)))
         this.storeTextOverrideCheck(addr, value, MemSize.HALF)
     }
-    fun storeHalfWordwCache(addr: Number, value: Number) {
-        if (this.settings.alignedAddress && addr % MemSize.HALF.size != 0) {
-            throw AlignmentError("Address: '" + Renderer.toHex(addr) + "' is not HALF WORD aligned!")
+    fun storeHalfWordwCache(addr: ByteAddress, value: Number) {
+        if (this.settings.alignedAddress) {
+            Memory.assertHalfWordAligned(addr)
         }
         if (!this.settings.mutableText && addr in (MemorySegments.TEXT_BEGIN + 1 - MemSize.HALF.size)..state.getMaxPC().toInt()) {
             throw StoreError("You are attempting to edit the text of the program though the program is set to immutable at address " + Renderer.toHex(addr) + "!")
@@ -452,15 +452,15 @@ class Simulator(
         postInstruction.add(CacheDiff(Address(addr, MemSize.HALF)))
     }
 
-    fun storeWord(addr: Number, value: Number) {
+    fun storeWord(addr: ByteAddress, value: Number) {
         preInstruction.add(MemoryDiff(addr, loadWord(addr)))
         state.mem.storeWord(addr, value)
         postInstruction.add(MemoryDiff(addr, loadWord(addr)))
         this.storeTextOverrideCheck(addr, value, MemSize.WORD)
     }
-    fun storeWordwCache(addr: Number, value: Number) {
-        if (this.settings.alignedAddress && addr % MemSize.WORD.size != 0) {
-            throw AlignmentError("Address: '" + Renderer.toHex(addr) + "' is not WORD aligned!")
+    fun storeWordwCache(addr: ByteAddress, value: Number) {
+        if (this.settings.alignedAddress) {
+            Memory.assertWordAligned(addr)
         }
         if (!this.settings.mutableText && addr in (MemorySegments.TEXT_BEGIN + 1 - MemSize.WORD.size)..state.getMaxPC().toInt()) {
             throw StoreError("You are attempting to edit the text of the program though the program is set to immutable at address " + Renderer.toHex(addr) + "!")
@@ -472,15 +472,15 @@ class Simulator(
         postInstruction.add(CacheDiff(Address(addr, MemSize.WORD)))
     }
 
-    fun storeLong(addr: Number, value: Number) {
+    fun storeLong(addr: ByteAddress, value: Number) {
         preInstruction.add(MemoryDiff(addr, loadLong(addr)))
         state.mem.storeLong(addr, value)
         postInstruction.add(MemoryDiff(addr, loadLong(addr)))
         this.storeTextOverrideCheck(addr, value, MemSize.LONG)
     }
-    fun storeLongwCache(addr: Number, value: Number) {
-        if (this.settings.alignedAddress && addr % MemSize.LONG.size != 0) {
-            throw AlignmentError("Address: '" + Renderer.toHex(addr) + "' is not long aligned!")
+    fun storeLongwCache(addr: ByteAddress, value: Number) {
+        if (this.settings.alignedAddress) {
+            Memory.assertWordAligned(addr)
         }
         if (!this.settings.mutableText && addr in (MemorySegments.TEXT_BEGIN + 1 - MemSize.WORD.size)..state.getMaxPC().toInt()) {
             throw StoreError("You are attempting to edit the text of the program though the program is set to immutable at address " + Renderer.toHex(addr) + "!")
@@ -492,7 +492,7 @@ class Simulator(
         postInstruction.add(CacheDiff(Address(addr, MemSize.LONG)))
     }
 
-    fun storeTextOverrideCheck(addr: Number, value: Number, size: MemSize) {
+    fun storeTextOverrideCheck(addr: ByteAddress, value: Number, size: MemSize) {
         /*Here, we will check if we are writing to memory*/
         if (addr in (MemorySegments.TEXT_BEGIN until state.getMaxPC().toInt()) || (addr + size.size - MemSize.BYTE.size) in (MemorySegments.TEXT_BEGIN until state.getMaxPC().toInt())) {
             try {
